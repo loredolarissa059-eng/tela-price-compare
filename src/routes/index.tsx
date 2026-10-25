@@ -18,7 +18,7 @@ export const Route = createFileRoute("/")({
 });
 
 interface Item { desc: string; price: number }
-interface Source { id: string; name: string; kind: SourceKind; rows: Item[] }
+interface Source { id: string; name: string; role: "concorrente" | "fornecedor"; dr: boolean; rows: Item[] }
 
 const CATALOG_URL = "https://jxcjgkbecvtqhydqecej.supabase.co/rest/v1/rpc/catalogo_v1_public_catalog";
 const CATALOG_KEY = "sb_publishable_80JQyTVag3qhgrZMcZUpMg_w1sUHysh";
@@ -44,23 +44,46 @@ function readSheet(rows: unknown[][]): Item[] {
     .filter((r) => r.desc && r.price > 0);
 }
 
+type Role = "concorrente" | "fornecedor";
+const kindOf = (s: Source): SourceKind => (s.role === "concorrente" ? "concorrente" : s.dr ? "distribuidor_dr" : "distribuidor");
+
+async function readFile(f: File): Promise<Item[]> {
+  const wb = XLSX.read(await f.arrayBuffer());
+  return wb.SheetNames.flatMap((n) =>
+    readSheet(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n]!, { header: 1, raw: true })),
+  );
+}
+
 function Index() {
   const [sources, setSources] = useState<Source[]>([]);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  async function onFiles(files: FileList | null) {
-    if (!files) return;
+  const competitor = sources.find((s) => s.role === "concorrente") ?? null;
+  const suppliers = sources.filter((s) => s.role === "fornecedor");
+
+  async function addFiles(files: FileList | null, role: Role, replaceId?: string) {
+    if (!files?.length) return;
+    setMsg("");
+    const list = role === "concorrente" ? [files[0]!] : Array.from(files);
     const added: Source[] = [];
-    for (const f of Array.from(files)) {
-      const wb = XLSX.read(await f.arrayBuffer());
-      const rows = wb.SheetNames.flatMap((n) =>
-        readSheet(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n]!, { header: 1, raw: true })),
-      );
-      added.push({ id: crypto.randomUUID(), name: f.name.replace(/\.xlsx?$/i, ""), kind: "distribuidor", rows });
+    for (const f of list) {
+      try {
+        const rows = await readFile(f);
+        if (!rows.length) { setMsg(`"${f.name}" não tem linhas com descrição e preço.`); continue; }
+        added.push({ id: crypto.randomUUID(), name: f.name.replace(/\.(xlsx?|csv)$/i, ""), role, dr: false, rows });
+      } catch { setMsg(`Não foi possível ler "${f.name}".`); }
     }
-    setSources((s) => [...s, ...added]);
+    if (!added.length) return;
+    setSources((s) => {
+      if (role === "concorrente") return [...s.filter((x) => x.role !== "concorrente"), added[0]!];
+      if (replaceId) {
+        const old = s.find((x) => x.id === replaceId);
+        return s.map((x) => (x.id === replaceId ? { ...added[0]!, dr: old?.dr ?? false } : x));
+      }
+      return [...s, ...added];
+    });
   }
 
   async function importCatalog() {
@@ -76,8 +99,8 @@ function Index() {
       const rows: Item[] = (data.products ?? [])
         .filter((p: any) => p.is_available !== false && p.price_cents > 0)
         .map((p: any) => ({ desc: `${p.name} ${p.screen_brand ?? ""}`, price: p.price_cents / 100 }));
-      setSources((s) => [...s, { id: crypto.randomUUID(), name: "Catálogo online", kind: "distribuidor", rows }]);
-      setMsg(`${rows.length} produtos importados do catálogo.`);
+      setSources((s) => [...s, { id: crypto.randomUUID(), name: "Catálogo online", role: "fornecedor", dr: false, rows }]);
+      setMsg(`${rows.length} produtos importados do catálogo como fornecedor.`);
     } catch (e) {
       setMsg(`Não foi possível ler o catálogo (${String(e)}).`);
     } finally { setLoading(false); }
@@ -85,12 +108,15 @@ function Index() {
 
   const update = (id: string, patch: Partial<Source>) =>
     setSources((s) => s.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  const remove = (id: string) => setSources((s) => s.filter((x) => x.id !== id));
+
+  const columns = useMemo(() => (competitor ? [competitor, ...suppliers] : suppliers), [competitor, suppliers]);
 
   const table = useMemo(() => {
     const groups = new Map<string, { model: string; quality: string; cells: Record<string, { price: number; desc: string; brand: string }> }>();
-    for (const src of sources) {
+    for (const src of columns) {
       for (const it of src.rows) {
-        const p = parseDescription(it.desc, src.kind);
+        const p = parseDescription(it.desc, kindOf(src));
         if (!p.model) continue;
         const k = groupKey(p);
         const g = groups.get(k) ?? { model: p.model, quality: p.quality, cells: {} };
@@ -101,48 +127,92 @@ function Index() {
     }
     const q = filter.trim().toLowerCase();
     return [...groups.values()]
-      .filter((g) => Object.keys(g.cells).length > 0)
       .filter((g) => !q || `${g.model} ${g.quality}`.toLowerCase().includes(q))
       .sort((a, b) => Object.keys(b.cells).length - Object.keys(a.cells).length || a.model.localeCompare(b.model));
-  }, [sources, filter]);
+  }, [columns, filter]);
+
+  const warnings: string[] = [];
+  if (!competitor) warnings.push("Falta a planilha do concorrente: a comparação mostrará só os fornecedores.");
+  if (!suppliers.length) warnings.push("Adicione pelo menos uma planilha de fornecedor para saber onde comprar mais barato.");
 
   return (
     <main className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border px-6 py-6">
         <h1 className="text-3xl font-bold tracking-tight">Cotação de Telas</h1>
-        <p className="text-muted-foreground">Suba as planilhas e veja onde cada tela sai mais barata. O menor preço aparece em vermelho.</p>
+        <p className="text-muted-foreground">Envie a planilha do concorrente e as dos seus fornecedores. O menor preço de compra aparece em vermelho.</p>
       </header>
 
-      <section className="space-y-4 px-6 py-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="cursor-pointer rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-            Adicionar planilhas Excel
-            <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden" onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
-          </label>
-          <button onClick={importCatalog} disabled={loading} className="rounded-md border border-input px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50">
-            {loading ? "Importando…" : "Importar catálogo online"}
-          </button>
-          {msg && <span className="text-sm text-muted-foreground">{msg}</span>}
+      <section className="grid gap-6 px-6 py-6 lg:grid-cols-2">
+        {/* Concorrente */}
+        <div className="rounded-xl border-2 border-secondary bg-card p-5">
+          <div className="mb-1 flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-secondary text-sm font-bold text-secondary-foreground">1</span>
+            <h2 className="text-xl font-semibold">Planilha do concorrente</h2>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">Envie uma única planilha com os preços de venda do concorrente. Ela serve de referência e não entra na disputa de menor preço.</p>
+          {competitor ? (
+            <div className="rounded-lg border border-border bg-background p-3 text-sm">
+              <input value={competitor.name} onChange={(e) => update(competitor.id, { name: e.target.value })} className="w-full bg-transparent font-semibold outline-none" />
+              <div className="mt-2 flex items-center gap-3">
+                <span className="text-muted-foreground">{competitor.rows.length} itens</span>
+                <label className="ml-auto cursor-pointer text-primary hover:underline">
+                  Substituir
+                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { addFiles(e.target.files, "concorrente"); e.target.value = ""; }} />
+                </label>
+                <button onClick={() => remove(competitor.id)} className="text-muted-foreground hover:text-destructive">Remover</button>
+              </div>
+            </div>
+          ) : (
+            <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-input px-4 py-8 text-sm hover:bg-accent">
+              <span className="font-medium">Enviar planilha do concorrente</span>
+              <span className="text-muted-foreground">Excel (.xlsx, .xls) ou .csv</span>
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { addFiles(e.target.files, "concorrente"); e.target.value = ""; }} />
+            </label>
+          )}
         </div>
 
-        {sources.length > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {sources.map((s) => (
-              <div key={s.id} className="rounded-lg border border-border bg-card p-3 text-sm">
+        {/* Fornecedores */}
+        <div className="rounded-xl border-2 border-primary bg-card p-5">
+          <div className="mb-1 flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">2</span>
+            <h2 className="text-xl font-semibold">Planilhas dos meus fornecedores</h2>
+          </div>
+          <p className="mb-4 text-sm text-muted-foreground">Envie uma ou mais planilhas de distribuidores. Marque "Linha DR" no fornecedor que trabalha com telas DR.</p>
+          <div className="space-y-2">
+            {suppliers.map((s) => (
+              <div key={s.id} className="rounded-lg border border-border bg-background p-3 text-sm">
                 <input value={s.name} onChange={(e) => update(s.id, { name: e.target.value })} className="w-full bg-transparent font-semibold outline-none" />
-                <div className="mt-2 flex items-center gap-2">
-                  <select value={s.kind} onChange={(e) => update(s.id, { kind: e.target.value as SourceKind })} className="rounded border border-input bg-background px-2 py-1">
-                    <option value="concorrente">Concorrente</option>
-                    <option value="distribuidor">Distribuidor</option>
-                    <option value="distribuidor_dr">Distribuidor (linha DR)</option>
-                  </select>
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-1">
+                    <input type="checkbox" checked={s.dr} onChange={(e) => update(s.id, { dr: e.target.checked })} /> Linha DR
+                  </label>
                   <span className="text-muted-foreground">{s.rows.length} itens</span>
-                  <button onClick={() => setSources((x) => x.filter((y) => y.id !== s.id))} className="ml-auto text-muted-foreground hover:text-destructive">Remover</button>
+                  <label className="ml-auto cursor-pointer text-primary hover:underline">
+                    Substituir
+                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { addFiles(e.target.files, "fornecedor", s.id); e.target.value = ""; }} />
+                  </label>
+                  <button onClick={() => remove(s.id)} className="text-muted-foreground hover:text-destructive">Remover</button>
                 </div>
               </div>
             ))}
           </div>
-        )}
+          <div className="mt-3 flex flex-wrap gap-3">
+            <label className="cursor-pointer rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              + Adicionar fornecedor
+              <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden" onChange={(e) => { addFiles(e.target.files, "fornecedor"); e.target.value = ""; }} />
+            </label>
+            <button onClick={importCatalog} disabled={loading} className="rounded-md border border-input px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50">
+              {loading ? "Importando…" : "Importar catálogo online"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-4 px-6 pb-8">
+        {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+        {sources.length > 0 && warnings.map((w) => (
+          <p key={w} className="rounded-md border border-border bg-muted px-3 py-2 text-sm">⚠ {w}</p>
+        ))}
 
         {sources.length > 0 && (
           <input placeholder="Filtrar: ex. iPhone 11 OLED" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-full max-w-md rounded-md border border-input bg-background px-3 py-2 text-sm" />
@@ -155,32 +225,47 @@ function Index() {
                 <tr>
                   <th className="px-3 py-2">Modelo</th>
                   <th className="px-3 py-2">Qualidade</th>
-                  {sources.map((s) => (
+                  {competitor && (
+                    <th className="border-x border-border bg-secondary/40 px-3 py-2">
+                      <div className="text-xs font-semibold uppercase text-muted-foreground">Concorrente</div>
+                      {competitor.name}
+                    </th>
+                  )}
+                  {suppliers.map((s) => (
                     <th key={s.id} className="px-3 py-2">
+                      <div className="text-xs font-semibold uppercase text-muted-foreground">Fornecedor{s.dr ? " · DR" : ""}</div>
                       {s.name}
-                      <div className="text-xs font-normal text-muted-foreground">{s.kind === "concorrente" ? "concorrente" : "fornecedor"}</div>
                     </th>
                   ))}
+                  {competitor && suppliers.length > 0 && <th className="px-3 py-2">Melhor compra vs concorrente</th>}
                 </tr>
               </thead>
               <tbody>
                 {table.map((g) => {
-                  const buy = sources.filter((s) => s.kind !== "concorrente").map((s) => g.cells[s.id]?.price).filter((p): p is number => p != null);
+                  const buy = suppliers.map((s) => g.cells[s.id]?.price).filter((p): p is number => p != null);
                   const min = buy.length ? Math.min(...buy) : null;
+                  const comp = competitor ? g.cells[competitor.id] : undefined;
+                  const cell = (s: Source, isComp: boolean) => {
+                    const c = g.cells[s.id];
+                    const best = !isComp && c && c.price === min;
+                    return (
+                      <td key={s.id} title={c?.desc} className={`px-3 py-2 ${isComp ? "border-x border-border bg-secondary/20" : ""} ${best ? "font-bold text-destructive" : ""}`}>
+                        {c ? brl(c.price) : <span className="text-muted-foreground">—</span>}
+                        {c?.brand && <span className="ml-1 rounded bg-muted px-1 text-xs text-muted-foreground">{c.brand}</span>}
+                      </td>
+                    );
+                  };
                   return (
                     <tr key={g.model + g.quality} className="border-t border-border">
                       <td className="px-3 py-2 font-medium">{g.model}</td>
                       <td className="px-3 py-2">{g.quality}</td>
-                      {sources.map((s) => {
-                        const c = g.cells[s.id];
-                        const best = c && s.kind !== "concorrente" && c.price === min;
-                        return (
-                          <td key={s.id} title={c?.desc} className={`px-3 py-2 ${best ? "font-bold text-destructive" : ""}`}>
-                            {c ? brl(c.price) : <span className="text-muted-foreground">—</span>}
-                            {c?.brand && <span className="ml-1 rounded bg-muted px-1 text-xs text-muted-foreground">{c.brand}</span>}
-                          </td>
-                        );
-                      })}
+                      {competitor && cell(competitor, true)}
+                      {suppliers.map((s) => cell(s, false))}
+                      {competitor && suppliers.length > 0 && (
+                        <td className="px-3 py-2 text-muted-foreground">
+                          {comp && min != null ? `${brl(comp.price - min)} de margem` : "—"}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -188,7 +273,7 @@ function Index() {
             </table>
           </div>
         ) : (
-          <p className="text-muted-foreground">Nenhuma planilha carregada ainda. A planilha precisa ter uma coluna de descrição e uma de preço.</p>
+          <p className="text-muted-foreground">Nenhuma planilha carregada ainda. Cada planilha precisa ter uma coluna de descrição e uma de preço.</p>
         )}
       </section>
     </main>
