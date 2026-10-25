@@ -120,7 +120,7 @@ function Index() {
         const p = parseDescription(it.desc, kindOf(src));
         if (!p.model) continue;
         const k = groupKey(p);
-        const g = groups.get(k) ?? { id: k, model: p.model, quality: p.quality, cells: {} };
+        const g = groups.get(k) ?? { id: k, model: p.model, quality: p.quality + (p.aro ? " · com aro" : "") + (p.brand === "DR" ? " · DR" : ""), cells: {} };
         const cur = g.cells[src.id];
         if (!cur || it.price < cur.price) g.cells[src.id] = { price: it.price, desc: it.desc, brand: p.brand };
         groups.set(k, g);
@@ -139,7 +139,7 @@ function Index() {
       if (!p.model) return { id: `c${i}`, model: it.desc, quality: "—", cells: { [competitor.id]: own } };
       const k = groupKey(p);
       used.add(k);
-      return { id: `c${i}`, model: p.model, quality: p.quality, cells: { ...(groups.get(k)?.cells ?? {}), [competitor.id]: own } };
+      return { id: `c${i}`, model: p.model, quality: p.quality + (p.aro ? " · com aro" : "") + (p.brand === "Vibe" ? " · Vibe" : ""), cells: { ...(groups.get(k)?.cells ?? {}), [competitor.id]: own } };
     });
     const extra = [...groups.values()].filter((g) => !used.has(g.id)).sort((a, b) => a.model.localeCompare(b.model));
     return { baseRows: base.filter(match), extraRows: extra.filter(match) };
