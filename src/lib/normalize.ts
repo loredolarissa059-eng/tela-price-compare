@@ -11,7 +11,7 @@ const strip = (s: string) =>
   s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 
 const NOISE =
-  /\b(FRONTAL|TELA|DISPLAY|LCD|MODULO|COM|SEM|PRETO|PRETA|BRANCO|BRANCA|AZUL|VERMELHO|DOURADO|ROSA|VERDE|ROXO|AMARELO|PREMIUM|NOVO|NOVA|PECA|APPLE|SAMSUNG|GALAXY|PARA|DE|CI|ORIGINAL|NACIONAL|IMPORTADO)\b/g;
+  /\b(FRONTAL|TELA|DISPLAY|LCD|MODULO|COM|SEM|PRETO|PRETA|BRANCO|BRANCA|AZUL|VERMELHO|DOURADO|ROSA|VERDE|ROXO|AMARELO|PREMIUM|NOVO|NOVA|PECA|APPLE|SAMSUNG|GALAXY|MOTOROLA|MOTO|PARA|DE|CI|ORIGINAL|NACIONAL|IMPORTADO)\b/g;
 
 export const NATIVE = "Padrão (nativa)";
 
@@ -55,6 +55,11 @@ export function parseDescription(desc: string, kind: SourceKind): Parsed {
   // modelo
   s = s.replace(NOISE, " ");
   s = s.replace(/\s*\/\s*/g, "/").replace(/^\/+|\/+$/g, "");
+  if (s.includes("/")) {
+    // lista de modelos compatíveis: ignora ordem e sufixo 4G/5G
+    const parts = s.replace(/\b[45]G\b/g, " ").split("/").map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+    s = [...new Set(parts)].sort().join("/");
+  }
   s = s.replace(/\b(\d{1,2})G\b/g, "$1");
   s = s.replace(/\bIPHONE\s*(\d)/g, "IPHONE $1");
   s = s.replace(/\bIP\s*(\d)/g, "IPHONE $1");
