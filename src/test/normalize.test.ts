@@ -42,6 +42,11 @@ describe("normalização", () => {
   it("sem qualidade não vira FHD", () => {
     expect(parseDescription("Frontal a02s", "distribuidor").quality).not.toMatch(/FHD/);
   });
+  it("lista de modelos em outra ordem e com 5G é a mesma peça", () => {
+    expect(groupKey(parseDescription("Moto G14/G54/G55/G64 Vibe", "concorrente"))).toBe(
+      groupKey(parseDescription("DR moto g14/g54/g64 5g/g55 5g", "distribuidor_dr")),
+    );
+  });
   it("preço em reais", () => {
     expect(parsePrice("R$ 1.234,50")).toBe(1234.5);
   });
