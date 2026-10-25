@@ -29,7 +29,7 @@ function readSheet(rows: unknown[][]): Item[] {
   let hi = rows.findIndex((r) => r.some((c) => /desc|produto|nome|modelo|item/i.test(String(c ?? ""))));
   let dCol = -1, pCol = -1;
   if (hi >= 0) {
-    rows[hi].forEach((c, i) => {
+    (rows[hi] ?? []).forEach((c, i) => {
       const t = String(c ?? "");
       if (dCol < 0 && /desc|produto|nome|modelo|item/i.test(t)) dCol = i;
       if (pCol < 0 && /pre[cç]o|valor|price|r\$/i.test(t)) pCol = i;
@@ -56,7 +56,7 @@ function Index() {
     for (const f of Array.from(files)) {
       const wb = XLSX.read(await f.arrayBuffer());
       const rows = wb.SheetNames.flatMap((n) =>
-        readSheet(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n], { header: 1, raw: true })),
+        readSheet(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n]!, { header: 1, raw: true })),
       );
       added.push({ id: crypto.randomUUID(), name: f.name.replace(/\.xlsx?$/i, ""), kind: "distribuidor", rows });
     }
