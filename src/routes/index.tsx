@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { parseDescription, parsePrice, groupKey, type SourceKind } from "@/lib/normalize";
 
@@ -110,29 +110,44 @@ function Index() {
     setSources((s) => s.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   const remove = (id: string) => setSources((s) => s.filter((x) => x.id !== id));
 
-  const columns = useMemo(() => (competitor ? [competitor, ...suppliers] : suppliers), [competitor, suppliers]);
-
-  const table = useMemo(() => {
-    const groups = new Map<string, { model: string; quality: string; cells: Record<string, { price: number; desc: string; brand: string }> }>();
-    for (const src of columns) {
+  
+  type Cell = { price: number; desc: string; brand: string };
+  type Row = { id: string; model: string; quality: string; cells: Record<string, Cell> };
+  const { baseRows, extraRows } = useMemo(() => {
+    const groups = new Map<string, Row>();
+    for (const src of suppliers) {
       for (const it of src.rows) {
         const p = parseDescription(it.desc, kindOf(src));
         if (!p.model) continue;
         const k = groupKey(p);
-        const g = groups.get(k) ?? { model: p.model, quality: p.quality, cells: {} };
+        const g = groups.get(k) ?? { id: k, model: p.model, quality: p.quality, cells: {} };
         const cur = g.cells[src.id];
         if (!cur || it.price < cur.price) g.cells[src.id] = { price: it.price, desc: it.desc, brand: p.brand };
         groups.set(k, g);
       }
     }
     const q = filter.trim().toLowerCase();
-    return [...groups.values()]
-      .filter((g) => !q || `${g.model} ${g.quality}`.toLowerCase().includes(q))
-      .sort((a, b) => Object.keys(b.cells).length - Object.keys(a.cells).length || a.model.localeCompare(b.model));
-  }, [columns, filter]);
+    const match = (r: Row) => !q || `${r.model} ${r.quality}`.toLowerCase().includes(q);
+    if (!competitor) {
+      const all = [...groups.values()].sort((a, b) => Object.keys(b.cells).length - Object.keys(a.cells).length || a.model.localeCompare(b.model));
+      return { baseRows: [] as Row[], extraRows: all.filter(match) };
+    }
+    const used = new Set<string>();
+    const base: Row[] = competitor.rows.map((it, i) => {
+      const p = parseDescription(it.desc, "concorrente");
+      const own = { price: it.price, desc: it.desc, brand: p.brand };
+      if (!p.model) return { id: `c${i}`, model: it.desc, quality: "—", cells: { [competitor.id]: own } };
+      const k = groupKey(p);
+      used.add(k);
+      return { id: `c${i}`, model: p.model, quality: p.quality, cells: { ...(groups.get(k)?.cells ?? {}), [competitor.id]: own } };
+    });
+    const extra = [...groups.values()].filter((g) => !used.has(g.id)).sort((a, b) => a.model.localeCompare(b.model));
+    return { baseRows: base.filter(match), extraRows: extra.filter(match) };
+  }, [competitor, suppliers, filter]);
+  const table = [...baseRows, ...extraRows];
 
   const warnings: string[] = [];
-  if (!competitor) warnings.push("Falta a planilha do concorrente: a comparação mostrará só os fornecedores.");
+  if (!competitor) warnings.push("Sem planilha do concorrente: não há lista-base, por isso a tabela mostra só os fornecedores.");
   if (!suppliers.length) warnings.push("Adicione pelo menos uma planilha de fornecedor para saber onde comprar mais barato.");
 
   return (
@@ -241,7 +256,7 @@ function Index() {
                 </tr>
               </thead>
               <tbody>
-                {table.map((g) => {
+                {[...baseRows.map((g) => ({ g, extra: false })), ...extraRows.map((g) => ({ g, extra: true }))].map(({ g, extra }, idx) => {
                   const buy = suppliers.map((s) => g.cells[s.id]?.price).filter((p): p is number => p != null);
                   const min = buy.length ? Math.min(...buy) : null;
                   const comp = competitor ? g.cells[competitor.id] : undefined;
@@ -255,8 +270,16 @@ function Index() {
                       </td>
                     );
                   };
+                  const nCols = 2 + (competitor ? 1 : 0) + suppliers.length + (competitor && suppliers.length > 0 ? 1 : 0);
+                  const showHeader = extra && competitor && idx === baseRows.length;
                   return (
-                    <tr key={g.model + g.quality} className="border-t border-border">
+                    <Fragment key={g.id + (extra ? "x" : "")}>
+                    {showHeader && (
+                      <tr className="border-t-2 border-primary bg-muted">
+                        <td colSpan={nCols} className="px-3 py-2 font-semibold">Itens disponíveis apenas nos fornecedores</td>
+                      </tr>
+                    )}
+                    <tr className="border-t border-border">
                       <td className="px-3 py-2 font-medium">{g.model}</td>
                       <td className="px-3 py-2">{g.quality}</td>
                       {competitor && cell(competitor, true)}
@@ -267,6 +290,7 @@ function Index() {
                         </td>
                       )}
                     </tr>
+                    </Fragment>
                   );
                 })}
               </tbody>
