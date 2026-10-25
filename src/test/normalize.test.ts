@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDescription, parsePrice } from "@/lib/normalize";
+import { parseDescription, parsePrice, groupKey } from "@/lib/normalize";
 
 describe("normalização", () => {
   it("iPhone 11 OLED", () => {
@@ -23,6 +23,24 @@ describe("normalização", () => {
   it("Diamond e Gold são marcas", () => {
     const p = parseDescription("Frontal iPhone 11 Incell Diamond", "distribuidor");
     expect(p).toMatchObject({ model: "iPhone 11", quality: "Incell", brand: "Diamond" });
+  });
+  it("Samsung s/aro do concorrente = fornecedor sem menção a aro", () => {
+    expect(groupKey(parseDescription("Samsung a02s/a03/a03s/a04e s/aro", "concorrente"))).toBe(
+      groupKey(parseDescription("Frontal a02s/a03/a03s/a04e", "distribuidor")),
+    );
+  });
+  it("c/ aro do concorrente = com aro do fornecedor, e difere de sem aro", () => {
+    const c = groupKey(parseDescription("Samsung a02s/a03/a03s/a04e c/ aro", "concorrente"));
+    expect(c).toBe(groupKey(parseDescription("a02s/a03/a03s/a04e com aro", "distribuidor")));
+    expect(c).not.toBe(groupKey(parseDescription("a02s/a03/a03s/a04e", "distribuidor")));
+  });
+  it("Vibe compara com DR, não com tela comum", () => {
+    const v = groupKey(parseDescription("iPhone 11 Vibe", "concorrente"));
+    expect(v).toBe(groupKey(parseDescription("DR iPhone 11", "distribuidor_dr")));
+    expect(v).not.toBe(groupKey(parseDescription("iPhone 11", "distribuidor_dr")));
+  });
+  it("sem qualidade não vira FHD", () => {
+    expect(parseDescription("Frontal a02s", "distribuidor").quality).not.toMatch(/FHD/);
   });
   it("preço em reais", () => {
     expect(parsePrice("R$ 1.234,50")).toBe(1234.5);
