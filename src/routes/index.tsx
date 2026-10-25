@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Fragment, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { parseDescription, parsePrice, groupKey, type SourceKind } from "@/lib/normalize";
+import { Report } from "@/components/Report";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -59,6 +60,7 @@ function Index() {
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
+  const [tab, setTab] = useState<"comparacao" | "relatorio">("comparacao");
 
   const competitor = sources.find((s) => s.role === "concorrente") ?? null;
   const suppliers = sources.filter((s) => s.role === "fornecedor");
@@ -223,7 +225,18 @@ function Index() {
         </div>
       </section>
 
-      <section className="space-y-4 px-6 pb-8">
+      <nav className="flex gap-2 border-b border-border px-6">
+        {(["comparacao", "relatorio"] as const).map((t) => (
+          <button key={t} onClick={() => setTab(t)} className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold ${tab === t ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}>
+            {t === "comparacao" ? "Comparação" : "Relatório"}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "relatorio" ? (
+        <div className="pt-6"><Report competitor={competitor} suppliers={suppliers} baseRows={baseRows} extraRows={extraRows} /></div>
+      ) : (
+      <section className="space-y-4 px-6 pb-8 pt-6">
         {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
         {sources.length > 0 && warnings.map((w) => (
           <p key={w} className="rounded-md border border-border bg-muted px-3 py-2 text-sm">⚠ {w}</p>
@@ -300,6 +313,7 @@ function Index() {
           <p className="text-muted-foreground">Nenhuma planilha carregada ainda. Cada planilha precisa ter uma coluna de descrição e uma de preço.</p>
         )}
       </section>
+      )}
     </main>
   );
 }
